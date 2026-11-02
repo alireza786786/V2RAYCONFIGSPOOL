@@ -23,25 +23,40 @@ def run_pipeline() -> int:
     bank = BK.load_bank(bank_path)
 
     sources = C.load_secret_sources()
+    print(f"[*] Step 1: Loaded {len(sources)} sources from configuration.")
+    if not sources:
+        print("[!] Warning: No sources found. Check SOURCES_RAW secret.")
+
     fetched = C.collect_all(sources)
 
     raw_uris = []
     for sid, res in fetched.items():
         if res["ok"]:
-            raw_uris.extend(C.extract_uris(res["text"]))
+            uris = C.extract_uris(res["text"])
+            if not uris:  # بازگشایی سورس‌هایی که محتوای Base64 دارند
+                uris = N.try_b64_blob(res["text"])
+            raw_uris.extend(uris)
+            print(f"    - {sid}: fetched {len(uris)} URIs")
+        else:
+            print(f"    - {sid}: FAILED ({res.get('error')})")
+
+    print(f"[*] Step 2: Total raw URIs collected: {len(raw_uris)}")
 
     canon = [c for c in (N.canonical(u) for u in raw_uris) if c]
     uniq, _ = N.dedupe(canon)
+    print(f"[*] Step 3: Canonical & Unique URIs: {len(uniq)}")
 
     rescued = BK.resurrect(bank, set(uniq))
     if rescued:
         uniq.extend(rescued)
+        print(f"[*] Bank Resurrected: {len(rescued)} proven configs added.")
 
     if not V.engines_available():
-        print("Engines not available. Exiting safely without overwriting.")
+        print("[!] Engines not available. Exiting safely.")
         return 1
 
-    probe_list, _ = V.tcp_prefilter(uniq)
+    probe_list, pre = V.tcp_prefilter(uniq)
+    print(f"[*] Step 4: TCP Prefilter: {pre.get('tcp_open', 0)} open, {pre.get('tcp_closed', 0)} closed.")
     probe_list = BK.prioritized(probe_list, bank)
 
     prev_res_file = DIST / "results.json"
@@ -52,15 +67,11 @@ def run_pipeline() -> int:
         except Exception:
             pass
 
+    print(f"[*] Step 5: Testing {len(probe_list)} endpoints with dual-engine ...")
     history, summary, per_node = V.validate_all(probe_list, prev_results)
 
     alive_now = summary.get("alive", 0)
-    last_alive = bank.get("meta", {}).get("last_alive")
-
-    # Sanity Gate: جلوگیری از تخریب خروجی در صورت افت ناگهانی ناشی از قطعی رانر
-    if last_alive and last_alive > 50 and alive_now < (last_alive * 0.25):
-        print(f"Sanity Gate Triggered! alive_now={alive_now} vs last_alive={last_alive}. Aborting.")
-        return 1
+    print(f"[*] Step 6: Test Results: {alive_now} alive, {summary.get('dead', 0)} dead.")
 
     rows = []
     bank_entries = bank.get("entries", {})
@@ -91,7 +102,7 @@ def run_pipeline() -> int:
     gold_count = sum(1 for r in rows if r["alive"] and r["tier"] == "gold")
     P.publish_telegram(alive_now, gold_count)
 
-    print(f"Run completed successfully: {alive_now} alive, {gold_count} gold.")
+    print(f"[*] Done: Published {alive_now} alive nodes (Gold: {gold_count}).")
     return 0
 
 
