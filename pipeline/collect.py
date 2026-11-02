@@ -55,23 +55,50 @@ def fetch_source(src: dict) -> tuple[str, str, str | None]:
 
 def load_secret_sources() -> list[dict]:
     raw_env = os.environ.get("SOURCES_RAW", "").strip()
+    sources = []
+
     if raw_env:
+        text_to_parse = raw_env
+        if not raw_env.startswith(("{", "[", "http", "@")):
+            try:
+                text_to_parse = base64.b64decode(raw_env).decode("utf-8")
+            except Exception:
+                pass
+
         try:
-            if raw_env.startswith("["):
-                return json.loads(raw_env)
-            decoded = base64.b64decode(raw_env).decode("utf-8")
-            return json.loads(decoded)
+            data = json.loads(text_to_parse)
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict) and "sources" in data:
+                return data["sources"]
         except Exception:
             pass
-    sources_file = os.path.join(os.path.dirname(__file__), "sources.json")
-    if os.path.isfile(sources_file):
-        try:
-            with open(sources_file, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-                return data.get("sources", [])
-        except Exception:
-            return []
-    return []
+
+        # اگر کاربر سورس‌ها را خط‌به‌خط وارد کرده باشد
+        lines = [line.strip() for line in text_to_parse.splitlines() if line.strip() and not line.startswith("#")]
+        for idx, line in enumerate(lines):
+            if "t.me/" in line:
+                channel = line.split("t.me/")[-1].replace("s/", "").split("/")[0].split("?")[0]
+                sources.append({"id": f"tg_{idx}", "type": "telegram", "channel": channel})
+            elif line.startswith("@"):
+                sources.append({"id": f"tg_{idx}", "type": "telegram", "channel": line.lstrip("@")})
+            elif line.startswith(("http://", "https://")):
+                sources.append({"id": f"src_{idx}", "type": "url", "url": line})
+        if sources:
+            return sources
+
+    for p in ["sources.json", "pipeline/sources.json"]:
+        if os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                    if isinstance(data, list):
+                        return data
+                    if isinstance(data, dict) and "sources" in data:
+                        return data["sources"]
+            except Exception:
+                pass
+    return sources
 
 
 def collect_all(sources: list[dict], workers: int = 16) -> dict[str, dict]:
