@@ -30,9 +30,9 @@ jobs:
 
       - name: Download & Extract Engines
         run: |
-          mkdir -p bin
+          mkdir -p bin /tmp/sb_extract
 
-          # دانلود مستقیم آخرین نسخه رسمی و پایدار Xray
+          # دانلود آخرین نسخه رسمی و پایدار Xray
           curl -fsSL -o /tmp/xray.zip \
             "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
           unzip -oq /tmp/xray.zip xray -d bin
@@ -46,9 +46,11 @@ jobs:
           urllib.request.urlretrieve(url, "/tmp/sb.tgz")
           '
 
-          # استخراج و انتقال مستقل از نام پوشه
-          tar -xzf /tmp/sb.tgz -C /tmp
-          find /tmp -type f -name "sing-box" -exec mv {} bin/ \;
+          # استخراج در پوشه ایزوله اختصاصی (بدون اسکن یا تداخل با پوشه‌های سیستمی)
+          tar -xzf /tmp/sb.tgz -C /tmp/sb_extract
+          mv /tmp/sb_extract/*/sing-box bin/
+          rm -rf /tmp/sb_extract /tmp/sb.tgz /tmp/xray.zip
+
           chmod +x bin/xray bin/sing-box
 
       - name: Verify Engines
