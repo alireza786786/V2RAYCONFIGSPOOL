@@ -1,0 +1,39 @@
+{
+  "inbounds": [
+    {
+      "type": "mixed",
+      "listen": "127.0.0.1",
+      "listen_port": 2080
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "V2Pool",
+      "outbounds": []
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "domain_suffix": [
+          ".ir"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "geoip": [
+          "ir"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "outbound": "V2Pool"
+      }
+    ]
+  }
+}
