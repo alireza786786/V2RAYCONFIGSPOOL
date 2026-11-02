@@ -1,19 +1,25 @@
 # Python
 __pycache__/
 *.py[cod]
+*$py.class
 .venv/
 venv/
 *.egg-info/
 
-# Generated output (published to the `data` branch by CI)
-dist/
+# Security & Secrets (جلوگیری از افشای سهوی منابع و توکن‌ها)
+.env
+*.env
+sources.json
+pipeline/sources.json
 
-# Engine binaries (fetched per-run by CI, cached)
+# Temporary & CI folders
+dist/
 bin/
 engines/
 
-# OS / editor
+# OS / Editors
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
+*.swp
