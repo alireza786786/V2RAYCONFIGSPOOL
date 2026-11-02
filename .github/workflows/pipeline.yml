@@ -1,0 +1,93 @@
+name: pipeline
+
+on:
+  schedule:
+    # اجرا هر ۴۵ دقیقه (منطبق بر چرخه استراحت ضد اسپم)
+    - cron: "0,45 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+env:
+  XRAY_VERSION: "26.10.29"
+  SINGBOX_VERSION: "1.14.4"
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache Engine Binaries
+        id: engines
+        uses: actions/cache@v4
+        with:
+          path: bin
+          key: engines-${{ env.XRAY_VERSION }}-${{ env.SINGBOX_VERSION }}
+
+      - name: Download & Extract Engines
+        if: steps.engines.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p bin
+          curl -fsSL -o /tmp/xray.zip \
+            "https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip"
+          unzip -oq /tmp/xray.zip xray -d bin
+
+          curl -fsSL -o /tmp/sb.tgz \
+            "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-amd64.tar.gz"
+          tar -xzf /tmp/sb.tgz -C /tmp
+          mv "/tmp/sing-box-${SINGBOX_VERSION}-linux-amd64/sing-box" bin/
+          chmod +x bin/xray bin/sing-box
+
+      - name: Verify Engines
+        run: |
+          ./bin/xray version | head -1
+          ./bin/sing-box version | head -1
+
+      # بازیابی بانک و سوابق از شاخه main (در صورت وجود)
+      - name: Restore Previous Bank
+        run: |
+          mkdir -p dist
+          [ -f bank.json ] && cp bank.json dist/bank.json || echo "First run: no bank.json"
+          [ -f results.json ] && cp results.json dist/results.json || echo "First run: no results.json"
+
+      - name: Run Pipeline Core
+        env:
+          XRAY_BIN: ${{ github.workspace }}/bin/xray
+          SINGBOX_BIN: ${{ github.workspace }}/bin/sing-box
+          CONCURRENCY: "64"
+          VALIDATE_TIMEOUT: "4.5"
+          # سکرت‌ها بدون هیچ ردپایی در کد فراخوانی می‌شوند
+          SOURCES_RAW: ${{ secrets.SOURCES_RAW }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m pipeline.main
+
+      # انتشار مستقیم روی شاخه اصلی (main) با تکنیک Rolling Squash
+      - name: Deploy to Main Branch
+        run: |
+          cp -r dist/* ./
+          rm -rf dist bin
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "Auto-update node pool [skip ci]"
+            git push origin main
+          else
+            echo "No changes to commit."
+          fi
