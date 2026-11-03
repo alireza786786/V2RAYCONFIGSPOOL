@@ -107,7 +107,7 @@ def run_pipeline() -> int:
     silver_count = sum(1 for r in rows if r["alive"] and r["tier"] == "silver")
 
     # انتشار استاندارد تلگرام همراه با دکمه‌های شیشه‌ای
-    P.publish_telegram(alive_now, gold_count, silver_count, cycle_count)
+    P.publish_telegram(alive_now, gold_count, silver_count)
 
     print(f"[*] Done: Published {alive_now} alive nodes (Gold: {gold_count}, Silver: {silver_count}).")
     return 0
