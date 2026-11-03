@@ -36,7 +36,7 @@ def to_jalali(gy: int, gm: int, gd: int) -> tuple[int, int, int]:
 
 def remark_uri(uri: str, ping_ms: float | None, tier_name: str | None = None) -> str:
     base = uri.split("#", 1)[0]
-    ms_txt = f"{int(round(ping_ms))}ms" if (ping_ms and ping_ms > 0) else "OK"
+    ms_txt = f"{int(round(ping_ms))}ms" if (ping_ms and ping_ms > 0) else "Node"
     if tier_name == "gold":
         tag = f"V2Pool-GOLD-{ms_txt}"
     elif tier_name == "silver":
@@ -50,50 +50,44 @@ def publish_outputs(dist: Path, rows: list[dict], all_unique: list[str]) -> None
     dist.mkdir(exist_ok=True, parents=True)
     alive = [r for r in rows if r["alive"]]
 
-    # 1. فایل همه کانفیگ‌ها (All)
+    # 1. فایل همه کانفیگ‌ها
     all_branded = [remark_uri(u, None) for u in all_unique]
     all_txt = "\n".join(all_branded) + "\n"
     (dist / "all.txt").write_text(all_txt, encoding="utf-8")
     write_b64(dist / "all.b64", all_txt)
 
-    # 2. فایل پایدار (همه تست‌شده‌های سالم)
+    # 2. فایل پایدار (تمام زنده‌ها)
     val_branded = [remark_uri(r["uri"], r.get("latency_ms")) for r in alive]
     val_txt = "\n".join(val_branded) + "\n"
     (dist / "validated.txt").write_text(val_txt, encoding="utf-8")
     write_b64(dist / "validated.b64", val_txt)
 
-    # 3. فایل رده طلا (Gold)
+    # 3. فایل رده طلا
     gold_rows = [r for r in alive if r["tier"] == "gold"]
     gold_branded = [remark_uri(r["uri"], r.get("latency_ms"), "gold") for r in gold_rows]
     gold_txt = "\n".join(gold_branded) + "\n"
     (dist / "gold.txt").write_text(gold_txt, encoding="utf-8")
     write_b64(dist / "gold.b64", gold_txt)
 
-    # 4. فایل رده نقره (Silver)
+    # 4. فایل رده نقره
     silver_rows = [r for r in alive if r["tier"] == "silver"]
     silver_branded = [remark_uri(r["uri"], r.get("latency_ms"), "silver") for r in silver_rows]
     silver_txt = "\n".join(silver_branded) + "\n"
     (dist / "silver.txt").write_text(silver_txt, encoding="utf-8")
     write_b64(dist / "silver.b64", silver_txt)
 
-    # 5. خروجی کلاینت‌ها (Clash & Sing-box)
+    # 5. خروجی کلاینت‌ها
     (dist / "clash.yaml").write_text(E.to_mihomo(alive), encoding="utf-8")
     (dist / "singbox.json").write_text(E.to_singbox(alive), encoding="utf-8")
 
 
-def publish_telegram(alive_count: int, gold_count: int, silver_count: int, cycle_count: int) -> None:
+def publish_telegram(alive_count: int, gold_count: int, silver_count: int) -> None:
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     if not bot_token or not chat_id:
         return
 
-    # چرخه ۴تایی: ۳ استراحت + ۱ ارسال (هر ۳ ساعت یک‌بار ارسال در کانال)
-    # دور اول (cycle_count == 1) همیشه ارسال می‌شود تا از کارکرد مطمئن شوید
-    if cycle_count > 1 and (cycle_count % 4 != 0):
-        print(f"[Telegram] Cadence rest ({cycle_count % 4}/4). Skipped channel message.")
-        return
-
-    # تبدیل به وقت ایران (UTC + 3:30)
+    # وقت تهران (UTC + 3:30)
     tehran_dt = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=3, minutes=30)
     jy, jm, jd = to_jalali(tehran_dt.year, tehran_dt.month, tehran_dt.day)
     jalali_str = f"{jy}/{jm:02d}/{jd:02d} - {tehran_dt.strftime('%H:%M')}"
@@ -107,7 +101,6 @@ def publish_telegram(alive_count: int, gold_count: int, silver_count: int, cycle
         f"⚡️ اتصال هوشمند: ترافیک داخلی ایران کاملاً مستقیم (DIRECT)"
     )
 
-    # ۴ دکمه شیشه‌ای (Inline Keyboard)
     reply_markup = {
         "inline_keyboard": [
             [
