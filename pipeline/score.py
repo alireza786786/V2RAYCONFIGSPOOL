@@ -1,45 +1,47 @@
 from __future__ import annotations
 
-WEIGHTS = {"latency": 0.35, "success": 0.25, "streak": 0.25, "protocol": 0.15}
+WEIGHTS = {"latency": 0.40, "success": 0.30, "protocol": 0.15, "streak": 0.15}
 
 PROTOCOL_BONUS = {
-    "hysteria2": 100, "hy2": 100, "tuic": 90,
-    "vless": 80, "vmess": 65, "trojan": 65, "ss": 50, "ssr": 20
+    "hysteria2": 100, "hy2": 100, "tuic": 95,
+    "vless": 85, "vmess": 70, "trojan": 70, "ss": 50, "ssr": 20
 }
 
 
 def latency_score(ms: float) -> float:
-    if ms <= 180:
+    if ms <= 200:
         return 100.0
     if ms <= 350:
-        return 80.0
-    if ms <= 700:
-        return 55.0
-    if ms <= 1100:
-        return 30.0
-    return 10.0
+        return 85.0
+    if ms <= 600:
+        return 65.0
+    if ms <= 1000:
+        return 40.0
+    return 15.0
 
 
 def protocol_score(uri: str) -> float:
     scheme = uri.split("://", 1)[0].lower()
-    score = float(PROTOCOL_BONUS.get(scheme, 30.0))
+    score = float(PROTOCOL_BONUS.get(scheme, 40.0))
     if scheme == "vless" and "security=reality" in uri.lower():
-        score = 95.0
+        score = 100.0
     return score
 
 
 def streak_score(streak: int) -> float:
-    return min(100.0, float(streak) * 10.0)
+    # پایه امتیاز برای زنده بودن در تست جاری + پاداش سابقه
+    return min(100.0, 50.0 + float(streak) * 10.0)
 
 
 def total(latency_ms: float | None, success_rate: float | None, streak: int, uri: str) -> float:
     parts = {}
     if latency_ms is not None:
         parts["latency"] = latency_score(latency_ms)
-    if success_rate is not None:
-        parts["success"] = max(0.0, min(1.0, success_rate)) * 100.0
-    parts["streak"] = streak_score(streak)
+    # در تست‌های اولیه موفقیت ۱۰۰٪ در نظر گرفته می‌شود
+    rate = success_rate if (success_rate and success_rate > 0) else 1.0
+    parts["success"] = max(0.0, min(1.0, rate)) * 100.0
     parts["protocol"] = protocol_score(uri)
+    parts["streak"] = streak_score(streak)
 
     wsum = sum(WEIGHTS[k] for k in parts)
     return round(sum(WEIGHTS[k] * v for k, v in parts.items()) / wsum, 1)
@@ -48,6 +50,6 @@ def total(latency_ms: float | None, success_rate: float | None, streak: int, uri
 def tier(score: float) -> str:
     if score >= 80.0:
         return "gold"
-    if score >= 55.0:
+    if score >= 60.0:
         return "silver"
     return "bronze"
