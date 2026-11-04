@@ -22,9 +22,6 @@ def run_pipeline() -> int:
     bank_path = str(DIST / "bank.json")
     bank = BK.load_bank(bank_path)
 
-    cycle_count = int(bank.get("meta", {}).get("cycle_count", 0)) + 1
-    bank.setdefault("meta", {})["cycle_count"] = cycle_count
-
     sources = C.load_secret_sources()
     print(f"[*] Step 1: Loaded {len(sources)} sources from configuration.")
     if not sources:
@@ -98,17 +95,16 @@ def run_pipeline() -> int:
     uris_by_hash = {hashlib.sha256(u.encode()).hexdigest()[:16]: u for u in uniq}
     bank = BK.merge_run(bank, history, alive_hashes, alive_now, uris_by_hash)
 
-    # انتشار هر ۴ فایل اصلی و کلاینت‌ها
+    # ساخت فایل‌های چهارگانه با الگوی مصوب Goodbaye
     P.publish_outputs(DIST, rows, uniq)
     (DIST / "bank.json").write_text(json.dumps(bank, ensure_ascii=False, indent=2), encoding="utf-8")
     (DIST / "results.json").write_text(json.dumps(history, ensure_ascii=False), encoding="utf-8")
 
+    # ارسال فایل‌های کانفیگ به تلگرام با کپشن ۵ خطی و ۴ دکمه شیشه‌ای
+    P.publish_telegram(DIST)
+
     gold_count = sum(1 for r in rows if r["alive"] and r["tier"] == "gold")
     silver_count = sum(1 for r in rows if r["alive"] and r["tier"] == "silver")
-
-    # انتشار استاندارد تلگرام همراه با دکمه‌های شیشه‌ای
-    P.publish_telegram(alive_now, gold_count, silver_count)
-
     print(f"[*] Done: Published {alive_now} alive nodes (Gold: {gold_count}, Silver: {silver_count}).")
     return 0
 
