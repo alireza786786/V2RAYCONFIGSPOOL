@@ -11,7 +11,7 @@ PROBE_URL = "http://www.gstatic.com/generate_204"
 
 def _brand_name(ping_ms: float | None, seen: dict, tier: str | None = None) -> str:
     ms_txt = f"{int(round(ping_ms))}ms" if ping_ms else "alive"
-    tag = f"-GOLD" if tier == "gold" else ""
+    tag = "-GOLD" if tier == "gold" else ("-SILVER" if tier == "silver" else "")
     base = f"V2Pool{tag}-{ms_txt}"
     n = seen.get(base, 0) + 1
     seen[base] = n
@@ -130,6 +130,8 @@ def to_mihomo(rows: list[dict]) -> str:
         "    interval: 300",
         "    proxies:",
     ] + [f"      - {_y(n)}" for n in names]
+    
+    # رول‌های مستقیم ایران
     rules = [
         "rules:",
         "  - DOMAIN-SUFFIX,ir,DIRECT",
@@ -145,7 +147,6 @@ def to_singbox(rows: list[dict]) -> str:
         tag = _brand_name(r.get("latency_ms"), seen, r.get("tier"))
         scheme = _scheme(r["uri"])
         host, port = _hostport(r["uri"])
-        q = _query(r["uri"])
         if scheme == "vless":
             outbounds.append({
                 "type": "vless", "tag": tag, "server": host, "server_port": port,
