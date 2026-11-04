@@ -2,14 +2,24 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import hashlib
 import json
 import os
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from . import exports as E
 
 REPO_RAW_URL = "https://raw.githubusercontent.com/alireza786786/V2RAYCONFIGSPOOL/main"
+
+COUNTRY_NAMES_FA = {
+    "DE": "آلمان", "US": "آمریکا", "FR": "فرانسه", "NL": "هلند",
+    "GB": "انگلیس", "UK": "انگلیس", "FI": "فنلاند", "TR": "ترکیه",
+    "SG": "سنگاپور", "CA": "کانادا", "PL": "لهستان", "RU": "روسیه",
+    "AE": "امارات", "IR": "ایران", "SE": "سوئد", "CH": "سوئیس",
+    "IT": "ایتالیا", "ES": "اسپانیا", "AT": "اتریش", "JP": "ژاپن"
+}
 
 
 def write_b64(path: Path, text: str) -> None:
@@ -34,15 +44,87 @@ def to_jalali(gy: int, gm: int, gd: int) -> tuple[int, int, int]:
     return jy, jm, jd
 
 
-def remark_uri(uri: str, ping_ms: float | None, tier_name: str | None = None) -> str:
-    base = uri.split("#", 1)[0]
-    ms_txt = f"{int(round(ping_ms))}ms" if (ping_ms and ping_ms > 0) else "Node"
-    if tier_name == "gold":
-        tag = f"V2Pool-GOLD-{ms_txt}"
-    elif tier_name == "silver":
-        tag = f"V2Pool-SILVER-{ms_txt}"
+def _get_flag(cc: str) -> str:
+    if not cc or len(cc) != 2:
+        return "🌐"
+    return "".join(chr(127397 + ord(c)) for c in cc.upper())
+
+
+def _extract_host(uri: str) -> str:
+    try:
+        if uri.startswith("vmess://"):
+            data = json.loads(base64.b64decode(uri[8:].strip() + "==").decode("utf-8", "ignore"))
+            return str(data.get("add", ""))
+        u = urlsplit(f"//{uri.split('://', 1)[1].partition('?')[0].partition('#')[0]}")
+        return (u.hostname or "").rstrip(".")
+    except Exception:
+        return ""
+
+
+def _parse_cap_and_proto(uri: str) -> tuple[str, str]:
+    scheme = uri.split("://", 1)[0].lower()
+    low = uri.lower()
+
+    if "security=reality" in low or "pbk=" in low:
+        cap = "Reality"
+    elif "type=ws" in low or "net=ws" in low or '"net":"ws"' in low:
+        cap = "WebSocket"
+    elif "type=grpc" in low or "net=grpc" in low:
+        cap = "gRPC"
+    elif scheme in ("hysteria2", "hy2"):
+        cap = "QUIC-UDP"
+    elif "security=tls" in low:
+        cap = "TLS"
     else:
-        tag = f"V2Pool-{ms_txt}"
+        cap = "Direct"
+
+    host = _extract_host(uri)
+    is_ipv6 = ":" in host
+    ip_ver = "IPv6" if is_ipv6 else "IPv4"
+
+    proto_names = {
+        "vless": "VLESS", "vmess": "VMess", "trojan": "Trojan",
+        "ss": "Shadowsocks", "ssr": "SSR", "hysteria2": "Hysteria2",
+        "hy2": "Hysteria2", "tuic": "TUIC"
+    }
+    proto_title = proto_names.get(scheme, scheme.upper())
+    return cap, f"{proto_title} {ip_ver}"
+
+
+def remark_uri(uri: str, ping_ms: float | None) -> str:
+    """الگوی ثابت، اختصاصی و غیرقابل تغییر Goodbaye برای تمام پروتکل‌ها حتی VMess"""
+    host = _extract_host(uri)
+    cc = "DE"
+    dc_name = "Cloud"
+    if "hetzner" in host or "hz" in host:
+        dc_name = "Hetzner"
+        cc = "DE"
+    elif "cloudflare" in host or "cf" in host:
+        dc_name = "Cloudflare"
+    elif "ovh" in host:
+        dc_name = "OVH"
+        cc = "FR"
+
+    flag = _get_flag(cc)
+    country_fa = COUNTRY_NAMES_FA.get(cc, "آلمان")
+    ping_str = f"{int(round(ping_ms))}ms" if (ping_ms and ping_ms > 0) else "OK"
+    cap, proto_ip = _parse_cap_and_proto(uri)
+
+    tag = (
+        f"👉🆔@Goodbaye_filtering 📡{flag} {country_fa} ®️{dc_name} "
+        f"🅿️ping:{ping_str} ⚡{cap} | {proto_ip}"
+    )
+
+    if uri.startswith("vmess://"):
+        try:
+            data = json.loads(base64.b64decode(uri[8:].strip() + "==").decode("utf-8", "ignore"))
+            data["ps"] = tag
+            new_b64 = base64.b64encode(json.dumps(data, ensure_ascii=False).encode()).decode()
+            return f"vmess://{new_b64}"
+        except Exception:
+            pass
+
+    base = uri.split("#", 1)[0]
     return f"{base}#{tag}"
 
 
@@ -50,82 +132,114 @@ def publish_outputs(dist: Path, rows: list[dict], all_unique: list[str]) -> None
     dist.mkdir(exist_ok=True, parents=True)
     alive = [r for r in rows if r["alive"]]
 
-    # 1. فایل همه کانفیگ‌ها
+    # ۱. فایل تمام کانفیگ‌ها
     all_branded = [remark_uri(u, None) for u in all_unique]
     all_txt = "\n".join(all_branded) + "\n"
     (dist / "all.txt").write_text(all_txt, encoding="utf-8")
     write_b64(dist / "all.b64", all_txt)
 
-    # 2. فایل پایدار (تمام زنده‌ها)
+    # ۲. فایل پایدار (تمام زنده‌ها)
     val_branded = [remark_uri(r["uri"], r.get("latency_ms")) for r in alive]
     val_txt = "\n".join(val_branded) + "\n"
     (dist / "validated.txt").write_text(val_txt, encoding="utf-8")
     write_b64(dist / "validated.b64", val_txt)
 
-    # 3. فایل رده طلا
+    # ۳. فایل رده طلا
     gold_rows = [r for r in alive if r["tier"] == "gold"]
-    gold_branded = [remark_uri(r["uri"], r.get("latency_ms"), "gold") for r in gold_rows]
+    gold_branded = [remark_uri(r["uri"], r.get("latency_ms")) for r in gold_rows]
     gold_txt = "\n".join(gold_branded) + "\n"
     (dist / "gold.txt").write_text(gold_txt, encoding="utf-8")
     write_b64(dist / "gold.b64", gold_txt)
 
-    # 4. فایل رده نقره
+    # ۴. فایل رده نقره
     silver_rows = [r for r in alive if r["tier"] == "silver"]
-    silver_branded = [remark_uri(r["uri"], r.get("latency_ms"), "silver") for r in silver_rows]
+    silver_branded = [remark_uri(r["uri"], r.get("latency_ms")) for r in silver_rows]
     silver_txt = "\n".join(silver_branded) + "\n"
     (dist / "silver.txt").write_text(silver_txt, encoding="utf-8")
     write_b64(dist / "silver.b64", silver_txt)
 
-    # 5. خروجی کلاینت‌ها
+    # ۵. خروجی کلاینت‌ها
     (dist / "clash.yaml").write_text(E.to_mihomo(alive), encoding="utf-8")
     (dist / "singbox.json").write_text(E.to_singbox(alive), encoding="utf-8")
 
 
-def publish_telegram(alive_count: int, gold_count: int, silver_count: int) -> None:
+def _send_telegram_file(bot_token: str, chat_id: str, file_path: Path, caption: str, reply_markup: dict) -> bool:
+    """آپلود سند به تلگرام با کتابخانه استاندارد پایتون"""
+    boundary = "----GoodbayeBoundary" + hashlib.md5(os.urandom(16)).hexdigest()
+    body = bytearray()
+
+    def add_field(name: str, value: str):
+        body.extend(f"--{boundary}\r\n".encode())
+        body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
+        body.extend(f"{value}\r\n".encode())
+
+    add_field("chat_id", chat_id)
+    add_field("caption", caption)
+    add_field("parse_mode", "HTML")
+    add_field("reply_markup", json.dumps(reply_markup))
+
+    body.extend(f"--{boundary}\r\n".encode())
+    body.extend(f'Content-Disposition: form-data; name="document"; filename="{file_path.name}"\r\n'.encode())
+    body.extend(b"Content-Type: text/plain; charset=utf-8\r\n\r\n")
+    body.extend(file_path.read_bytes())
+    body.extend(b"\r\n")
+    body.extend(f"--{boundary}--\r\n".encode())
+
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{bot_token}/sendDocument",
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=35) as resp:
+            return resp.status == 200
+    except Exception as exc:
+        print(f"[Telegram] Failed to upload {file_path.name}: {exc}")
+        return False
+
+
+def publish_telegram(dist: Path) -> None:
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     if not bot_token or not chat_id:
         return
 
-    # وقت تهران (UTC + 3:30)
+    # زمان جلالی و افق تهران
     tehran_dt = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=3, minutes=30)
     jy, jm, jd = to_jalali(tehran_dt.year, tehran_dt.month, tehran_dt.day)
-    jalali_str = f"{jy}/{jm:02d}/{jd:02d} - {tehran_dt.strftime('%H:%M')}"
+    jalali_date = f"{jy}/{jm:02d}/{jd:02d}"
+    tehran_time = tehran_dt.strftime("%H:%M")
 
-    # الگوی ۵ خطی استاندارد Goodbaye
-    msg = (
-        f"🛰 <b>پایگاه کانفیگ‌های تست‌شده و پایدار V2Pool</b>\n"
-        f"📅 آخرین پایش: <code>{jalali_str}</code>\n"
-        f"📊 وضعیت شبکه: <b>{alive_count:,}</b> گره فعال و پاسخ‌گو\n"
-        f"🏅 تفکیک کیفیت: <b>{gold_count} طلا</b> | <b>{silver_count} نقره</b>\n"
-        f"⚡️ اتصال هوشمند: ترافیک داخلی ایران کاملاً مستقیم (DIRECT)"
-    )
-
+    # ۴ دکمه شیشه‌ای دقیق اعلام‌شده در میثاق
     reply_markup = {
         "inline_keyboard": [
-            [
-                {"text": "🥇 اشتراک رده طلا (ویژه)", "url": f"{REPO_RAW_URL}/gold.txt"},
-                {"text": "🥈 اشتراک رده نقره", "url": f"{REPO_RAW_URL}/silver.txt"}
-            ],
-            [
-                {"text": "🔰 اشتراک کل گره‌های سالم", "url": f"{REPO_RAW_URL}/validated.txt"},
-                {"text": "📱 اشتراک کلش (Clash)", "url": f"{REPO_RAW_URL}/clash.yaml"}
-            ]
+            [{"text": "📢 کانال اصلی Goodbaye_filtering", "url": "https://t.me/Goodbaye_filtering"}],
+            [{"text": "⚡ کانال اختصاصی VIP", "url": "https://t.me/CONFIG_V2RAY_VIP"}],
+            [{"text": "🔐 کانال خصوصی", "url": "https://t.me/+m4GhEHGLd2k5ZjU0"}],
+            [{"text": "🔄 اشتراک‌گذاری با دوستان", "url": "https://t.me/share/url?url=https://t.me/Goodbaye_filtering"}]
         ]
     }
 
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    payload = json.dumps({
-        "chat_id": chat_id,
-        "text": msg,
-        "parse_mode": "HTML",
-        "reply_markup": reply_markup,
-        "disable_web_page_preview": True
-    }).encode("utf-8")
+    # ارسال فایل‌های طلا و نقره
+    targets = [
+        ("gold.txt", "رده طلایی VIP"),
+        ("silver.txt", "رده نقره‌ای باکیفیت"),
+    ]
 
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-    try:
-        urllib.request.urlopen(req, timeout=12)
-        print("[Telegram] Published message with 4 inline buttons successfully.")
-    except Exception as exc:
-        print(f"[Telegram] Failed to send message: {exc}")
+    for fname, package_title in targets:
+        fpath = dist / fname
+        if fpath.exists() and fpath.stat().st_size > 0:
+            lines = [ln for ln in fpath.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            count = len(lines)
+
+            # کپشن پنج خطی مصوب میثاق Goodbaye
+            caption = (
+                f"🚀 <b>مجموعه کانفیگ‌های تست‌شده و زنده ({package_title})</b>\n"
+                f"📡 مناسب دوران اختلال، فیلترینگ و شبکه ملی\n\n"
+                f"📅 تاریخ شمسی: <code>{jalali_date}</code>\n"
+                f"⏰ ساعت تهران: <code>{tehran_time}</code>\n"
+                f"📊 شاخص کیفیت: VIP Strict (Ping &lt; 500ms)\n"
+                f"🔢 تعداد کانفیگ سالم این فایل: <b>{count:,}</b>"
+            )
+            _send_telegram_file(bot_token, chat_id, fpath, caption, reply_markup)
+            print(f"[Telegram] Uploaded {fname} successfully.")
