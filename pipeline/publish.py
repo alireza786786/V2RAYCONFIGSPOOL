@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import base64
+import bisect
 import datetime as dt
+import gzip
 import hashlib
+import io
+import ipaddress
 import json
 import os
+import socket
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -18,8 +23,86 @@ COUNTRY_NAMES_FA = {
     "GB": "انگلیس", "UK": "انگلیس", "FI": "فنلاند", "TR": "ترکیه",
     "SG": "سنگاپور", "CA": "کانادا", "PL": "لهستان", "RU": "روسیه",
     "AE": "امارات", "IR": "ایران", "SE": "سوئد", "CH": "سوئیس",
-    "IT": "ایتالیا", "ES": "اسپانیا", "AT": "اتریش", "JP": "ژاپن"
+    "IT": "ایتالیا", "ES": "اسپانیا", "AT": "اتریش", "JP": "ژاپن",
+    "KR": "کره‌جنوبی", "IN": "هند", "RO": "رومانی", "BG": "بلغارستان",
+    "NO": "نروژ", "DK": "دانمارک", "BE": "بلژیک", "HK": "هنگ‌کنگ"
 }
+
+ASN_DC_MAP = {
+    24940: "Hetzner", 13335: "Cloudflare", 16276: "OVH", 14061: "DigitalOcean",
+    20473: "Vultr", 8075: "Microsoft", 15169: "Google", 16509: "Amazon",
+    31898: "Oracle", 51167: "Contabo", 212238: "Datacamp", 200019: "Alexhost",
+    202422: "G-Core", 58224: "TCI", 197207: "MCI", 44244: "Irancell", 43395: "Shatel"
+}
+
+_GEO_TABLE = None
+_IP_CACHE: dict[str, str] = {}
+
+
+def _get_geo_table() -> dict | None:
+    global _GEO_TABLE
+    if _GEO_TABLE is not None:
+        return _GEO_TABLE
+    try:
+        from . import geo
+        _GEO_TABLE = geo.load_table()
+        if _GEO_TABLE:
+            return _GEO_TABLE
+    except Exception:
+        pass
+    try:
+        url = "https://iptoasn.com/data/ip2asn-v4-u32.tsv.gz"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        raw = urllib.request.urlopen(req, timeout=30).read()
+        starts, ends, asn, cc = [], [], [], []
+        with gzip.open(io.BytesIO(raw), "rt", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) >= 4:
+                    starts.append(int(parts[0]))
+                    ends.append(int(parts[1]))
+                    asn.append(int(parts[2]) if parts[2].isdigit() else 0)
+                    cc.append(parts[3].strip().upper())
+        _GEO_TABLE = {"starts": starts, "ends": ends, "asn": asn, "cc": cc}
+        return _GEO_TABLE
+    except Exception:
+        return None
+
+
+def _resolve_ip(host: str) -> str:
+    if not host:
+        return ""
+    if host in _IP_CACHE:
+        return _IP_CACHE[host]
+    try:
+        ipaddress.ip_address(host)
+        _IP_CACHE[host] = host
+        return host
+    except ValueError:
+        pass
+    try:
+        ip = socket.gethostbyname(host)
+        _IP_CACHE[host] = ip
+        return ip
+    except Exception:
+        _IP_CACHE[host] = host
+        return host
+
+
+def _lookup_geo(ip: str, table: dict | None) -> tuple[str, str]:
+    if not table or not ip:
+        return "DE", "Cloud"
+    try:
+        ipi = int(ipaddress.IPv4Address(ip))
+    except Exception:
+        return "DE", "Cloud"
+    idx = bisect.bisect_right(table["starts"], ipi) - 1
+    if idx >= 0 and table["ends"][idx] >= ipi:
+        cc = table["cc"][idx]
+        as_num = table["asn"][idx]
+        dc = ASN_DC_MAP.get(as_num, f"AS{as_num}" if as_num else "Cloud")
+        return cc, dc
+    return "DE", "Cloud"
 
 
 def write_b64(path: Path, text: str) -> None:
@@ -91,22 +174,13 @@ def _parse_cap_and_proto(uri: str) -> tuple[str, str]:
     return cap, f"{proto_title} {ip_ver}"
 
 
-def remark_uri(uri: str, ping_ms: float | None) -> str:
-    """الگوی ثابت، اختصاصی و غیرقابل تغییر Goodbaye برای تمام پروتکل‌ها حتی VMess"""
+def remark_uri(uri: str, ping_ms: float | None, table: dict | None) -> str:
     host = _extract_host(uri)
-    cc = "DE"
-    dc_name = "Cloud"
-    if "hetzner" in host or "hz" in host:
-        dc_name = "Hetzner"
-        cc = "DE"
-    elif "cloudflare" in host or "cf" in host:
-        dc_name = "Cloudflare"
-    elif "ovh" in host:
-        dc_name = "OVH"
-        cc = "FR"
+    ip = _resolve_ip(host)
+    cc, dc_name = _lookup_geo(ip, table)
 
     flag = _get_flag(cc)
-    country_fa = COUNTRY_NAMES_FA.get(cc, "آلمان")
+    country_fa = COUNTRY_NAMES_FA.get(cc, cc)
     ping_str = f"{int(round(ping_ms))}ms" if (ping_ms and ping_ms > 0) else "OK"
     cap, proto_ip = _parse_cap_and_proto(uri)
 
@@ -130,41 +204,36 @@ def remark_uri(uri: str, ping_ms: float | None) -> str:
 
 def publish_outputs(dist: Path, rows: list[dict], all_unique: list[str]) -> None:
     dist.mkdir(exist_ok=True, parents=True)
+    table = _get_geo_table()
     alive = [r for r in rows if r["alive"]]
 
-    # ۱. فایل تمام کانفیگ‌ها
-    all_branded = [remark_uri(u, None) for u in all_unique]
+    all_branded = [remark_uri(u, None, table) for u in all_unique]
     all_txt = "\n".join(all_branded) + "\n"
     (dist / "all.txt").write_text(all_txt, encoding="utf-8")
     write_b64(dist / "all.b64", all_txt)
 
-    # ۲. فایل پایدار (تمام زنده‌ها)
-    val_branded = [remark_uri(r["uri"], r.get("latency_ms")) for r in alive]
+    val_branded = [remark_uri(r["uri"], r.get("latency_ms"), table) for r in alive]
     val_txt = "\n".join(val_branded) + "\n"
     (dist / "validated.txt").write_text(val_txt, encoding="utf-8")
     write_b64(dist / "validated.b64", val_txt)
 
-    # ۳. فایل رده طلا
     gold_rows = [r for r in alive if r["tier"] == "gold"]
-    gold_branded = [remark_uri(r["uri"], r.get("latency_ms")) for r in gold_rows]
+    gold_branded = [remark_uri(r["uri"], r.get("latency_ms"), table) for r in gold_rows]
     gold_txt = "\n".join(gold_branded) + "\n"
     (dist / "gold.txt").write_text(gold_txt, encoding="utf-8")
     write_b64(dist / "gold.b64", gold_txt)
 
-    # ۴. فایل رده نقره
     silver_rows = [r for r in alive if r["tier"] == "silver"]
-    silver_branded = [remark_uri(r["uri"], r.get("latency_ms")) for r in silver_rows]
+    silver_branded = [remark_uri(r["uri"], r.get("latency_ms"), table) for r in silver_rows]
     silver_txt = "\n".join(silver_branded) + "\n"
     (dist / "silver.txt").write_text(silver_txt, encoding="utf-8")
     write_b64(dist / "silver.b64", silver_txt)
 
-    # ۵. خروجی کلاینت‌ها
     (dist / "clash.yaml").write_text(E.to_mihomo(alive), encoding="utf-8")
     (dist / "singbox.json").write_text(E.to_singbox(alive), encoding="utf-8")
 
 
 def _send_telegram_file(bot_token: str, chat_id: str, file_path: Path, caption: str, reply_markup: dict) -> bool:
-    """آپلود سند به تلگرام با کتابخانه استاندارد پایتون"""
     boundary = "----GoodbayeBoundary" + hashlib.md5(os.urandom(16)).hexdigest()
     body = bytearray()
 
@@ -204,13 +273,11 @@ def publish_telegram(dist: Path) -> None:
     if not bot_token or not chat_id:
         return
 
-    # زمان جلالی و افق تهران
     tehran_dt = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=3, minutes=30)
     jy, jm, jd = to_jalali(tehran_dt.year, tehran_dt.month, tehran_dt.day)
     jalali_date = f"{jy}/{jm:02d}/{jd:02d}"
     tehran_time = tehran_dt.strftime("%H:%M")
 
-    # ۴ دکمه شیشه‌ای دقیق اعلام‌شده در میثاق
     reply_markup = {
         "inline_keyboard": [
             [{"text": "📢 کانال اصلی Goodbaye_filtering", "url": "https://t.me/Goodbaye_filtering"}],
@@ -220,7 +287,6 @@ def publish_telegram(dist: Path) -> None:
         ]
     }
 
-    # ارسال فایل‌های طلا و نقره
     targets = [
         ("gold.txt", "رده طلایی VIP"),
         ("silver.txt", "رده نقره‌ای باکیفیت"),
@@ -230,16 +296,13 @@ def publish_telegram(dist: Path) -> None:
         fpath = dist / fname
         if fpath.exists() and fpath.stat().st_size > 0:
             lines = [ln for ln in fpath.read_text(encoding="utf-8").splitlines() if ln.strip()]
-            count = len(lines)
-
-            # کپشن پنج خطی مصوب میثاق Goodbaye
             caption = (
                 f"🚀 <b>مجموعه کانفیگ‌های تست‌شده و زنده ({package_title})</b>\n"
                 f"📡 مناسب دوران اختلال، فیلترینگ و شبکه ملی\n\n"
                 f"📅 تاریخ شمسی: <code>{jalali_date}</code>\n"
                 f"⏰ ساعت تهران: <code>{tehran_time}</code>\n"
                 f"📊 شاخص کیفیت: VIP Strict (Ping &lt; 500ms)\n"
-                f"🔢 تعداد کانفیگ سالم این فایل: <b>{count:,}</b>"
+                f"🔢 تعداد کانفیگ سالم این فایل: <b>{len(lines):,}</b>"
             )
             _send_telegram_file(bot_token, chat_id, fpath, caption, reply_markup)
             print(f"[Telegram] Uploaded {fname} successfully.")
