@@ -40,6 +40,7 @@ def extract_uris(text: str) -> list[str]:
 
 
 def fetch_source(src: dict) -> tuple[str, str, str | None]:
+    """دانلود با تاب‌آوری کامل؛ در صورت خطا کل خط لوله متوقف نمی‌شود."""
     try:
         url = src.get("url", "")
         if src.get("type") == "telegram":
@@ -54,6 +55,7 @@ def fetch_source(src: dict) -> tuple[str, str, str | None]:
 
 
 def load_secret_sources() -> list[dict]:
+    """خواندن منعطف SOURCES_RAW از گیت‌هاب (خط‌به‌خط، جیسون، یا بیس۶۴)"""
     raw_env = os.environ.get("SOURCES_RAW", "").strip()
     sources = []
 
@@ -74,7 +76,6 @@ def load_secret_sources() -> list[dict]:
         except Exception:
             pass
 
-        # اگر کاربر سورس‌ها را خط‌به‌خط وارد کرده باشد
         lines = [line.strip() for line in text_to_parse.splitlines() if line.strip() and not line.startswith("#")]
         for idx, line in enumerate(lines):
             if "t.me/" in line:
