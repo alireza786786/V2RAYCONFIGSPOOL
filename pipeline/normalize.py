@@ -140,7 +140,7 @@ def _canonical_url(uri: str) -> tuple[str, str] | None:
     qs = urlencode(sorted(parse_qsl(u.query, keep_blank_values=True)), safe=":/@+")
     canon = f"{scheme}://{userinfo + '@' if userinfo else ''}{hostpart}" + (f"?{qs}" if qs else "")
     params = dict(parse_qsl(u.query, keep_blank_values=True))
-    net = (params.get("type") or params.get("net") or "tcp").lower()
+    net = (params.get("net") or params.get("type") or "tcp").lower()
     sec = params.get("security", "").lower()
     path = params.get("path", "")
     sni = params.get("sni", "") or params.get("host", "")
