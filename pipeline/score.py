@@ -34,14 +34,9 @@ def total(latency_ms: float | None, success_rate: float | None, streak: int, uri
     parts = {}
     if latency_ms is not None:
         parts["latency"] = latency_score(latency_ms)
-    
-    # نرخ موفقیت طبق سابقه بانک
     rate = success_rate if (success_rate is not None and success_rate > 0) else 1.0
     parts["success"] = max(0.0, min(1.0, rate)) * 100.0
-    
-    # مؤلفه تازگی Ariston (برای هر گره زنده در اجرای جاری ۱۰۰٪ است)
     parts["freshness"] = 100.0
-    
     parts["protocol"] = protocol_score(uri)
 
     wsum = sum(WEIGHTS[k] for k in parts)
