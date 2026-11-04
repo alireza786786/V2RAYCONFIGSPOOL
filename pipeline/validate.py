@@ -8,7 +8,6 @@ import socket
 import struct
 import subprocess
 import tempfile
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -17,7 +16,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 
 ENV_XRAY = os.environ.get("XRAY_BIN", "bin/xray")
 ENV_SINGBOX = os.environ.get("SINGBOX_BIN", "bin/sing-box")
-ENV_CONCURRENCY = int(os.environ.get("CONCURRENCY", "24"))
+ENV_CONCURRENCY = int(os.environ.get("CONCURRENCY", "64"))
 ENV_TIMEOUT = float(os.environ.get("VALIDATE_TIMEOUT", "4.5"))
 ENV_PORT_BASE = int(os.environ.get("PORT_BASE", "21000"))
 BOOT_DEADLINE = 2.0
@@ -131,6 +130,7 @@ def engine_for(uri: str) -> str | None:
 
 
 def _xray_stream(q: dict, default_host: str, is_vmess: bool = False) -> dict | None:
+    # اصلاح باگ هم‌پوشانی net و type در VMess
     if is_vmess:
         net = str(q.get("net") or "tcp").lower()
     else:
