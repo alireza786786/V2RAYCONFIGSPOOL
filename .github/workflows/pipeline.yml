@@ -13,10 +13,6 @@ concurrency:
   group: pipeline
   cancel-in-progress: false
 
-env:
-  XRAY_VERSION: "26.10.29"
-  SINGBOX_VERSION: "1.14.4"
-
 jobs:
   pipeline:
     runs-on: ubuntu-latest
@@ -32,24 +28,31 @@ jobs:
         with:
           python-version: "3.11"
 
-      # کپی‌برداری دقیق از فایل اول جهت دانلود بدون ارور ۴۰۴ و بدون ارور ۴۰۳
-      - name: Fetch engines
+      - name: Download & Extract Engines
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p bin
-          curl -fsSL -o /tmp/xray.zip \
-            "https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip" || \
-          curl -fsSL -o /tmp/xray.zip \
-            "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-linux-64.zip"
-          unzip -oq /tmp/xray.zip xray -d bin
+          mkdir -p bin /tmp/sb_extract
 
-          curl -fsSL -o /tmp/sb.tgz \
-            "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-amd64.tar.gz"
-          tar -xzf /tmp/sb.tgz -C /tmp
-          mv "/tmp/sing-box-${SINGBOX_VERSION}-linux-amd64/sing-box" bin/
+          # دانلود آخرین نسخه رسمی و واقعی Xray با ابزار رسمی گیت‌هاب (ضد ارور 404 و 403)
+          gh release download --repo XTLS/Xray-core --pattern "Xray-linux-64.zip" --output /tmp/xray.zip --clobber
+          unzip -oq /tmp/xray.zip xray -d bin/
+
+          # دانلود آخرین نسخه رسمی و واقعی Sing-box
+          gh release download --repo SagerNet/sing-box --pattern "*linux-amd64.tar.gz" --output /tmp/sb.tgz --clobber
+          tar -xzf /tmp/sb.tgz -C /tmp/sb_extract
+          
+          # استخراج هوشمند باینری sing-box مستقل از نام پوشه
+          find /tmp/sb_extract -type f -name "sing-box" -exec mv {} bin/ \;
+
+          # پاکسازی و دادن دسترسی اجرایی
+          rm -rf /tmp/xray.zip /tmp/sb.tgz /tmp/sb_extract
           chmod +x bin/xray bin/sing-box
 
-      - name: Verify engines
-        run: bin/xray version | head -1 && bin/sing-box version | head -1
+      - name: Verify Engines
+        run: |
+          ./bin/xray version | head -n 1
+          ./bin/sing-box version | head -n 1
 
       - name: Prepare Workspace
         run: |
