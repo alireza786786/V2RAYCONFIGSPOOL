@@ -2,8 +2,8 @@ name: pipeline
 
 on:
   schedule:
-    # اجرا هر ۴۵ دقیقه (منطبق بر چرخه استراحت ضد اسپم)
-    - cron: "0,45 * * * *"
+    # اجرا در دقایق ۱۳ و ۴۳ هر ساعت (کاملاً آف‌پیک تا هرگز توسط گیت‌هاب Skip یا لغو نشود)
+    - cron: "13,43 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -13,6 +13,10 @@ concurrency:
   group: pipeline
   cancel-in-progress: false
 
+env:
+  XRAY_VER: "26.10.29"
+  SINGBOX_VER: "1.14.4"
+
 jobs:
   pipeline:
     runs-on: ubuntu-latest
@@ -21,36 +25,28 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Download & Extract Engines
+      - name: Download Engines
         run: |
-          mkdir -p bin /tmp/sb_extract
+          mkdir -p bin /tmp/sb
 
-          # دانلود آخرین نسخه رسمی و پایدار Xray
-          curl -fsSL -o /tmp/xray.zip \
-            "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
-          unzip -oq /tmp/xray.zip xray -d bin
+          # دانلود مستقیم Xray بدون وابستگی به API گیت‌هاب (ضد خطای 403 Rate Limit)
+          curl -fsSL "https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VER}/Xray-linux-64.zip" -o /tmp/xray.zip
+          unzip -oq /tmp/xray.zip xray -d bin/
 
-          # دریافت خودکار آدرس آخرین نسخه رسمی و پایدار Sing-box
-          python3 -c '
-          import urllib.request, json
-          req = urllib.request.Request("https://api.github.com/repos/SagerNet/sing-box/releases/latest", headers={"User-Agent": "Mozilla/5.0"})
-          data = json.loads(urllib.request.urlopen(req).read())
-          url = [a["browser_download_url"] for a in data["assets"] if a["name"].endswith("linux-amd64.tar.gz") and "musl" not in a["name"]][0]
-          urllib.request.urlretrieve(url, "/tmp/sb.tgz")
-          '
+          # دانلود مستقیم Sing-box پایدار
+          curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VER}/sing-box-${SINGBOX_VER}-linux-amd64.tar.gz" -o /tmp/sb.tgz
+          tar -xzf /tmp/sb.tgz -C /tmp/sb
+          mv /tmp/sb/*/sing-box bin/
 
-          # استخراج در پوشه ایزوله اختصاصی (بدون اسکن یا تداخل با پوشه‌های سیستمی)
-          tar -xzf /tmp/sb.tgz -C /tmp/sb_extract
-          mv /tmp/sb_extract/*/sing-box bin/
-          rm -rf /tmp/sb_extract /tmp/sb.tgz /tmp/xray.zip
-
+          # پاکسازی فایل‌های موقت و اعطای دسترسی اجرایی
+          rm -rf /tmp/xray.zip /tmp/sb.tgz /tmp/sb
           chmod +x bin/xray bin/sing-box
 
       - name: Verify Engines
@@ -58,36 +54,44 @@ jobs:
           ./bin/xray version | head -n 1
           ./bin/sing-box version | head -n 1
 
-      # بازیابی بانک و سوابق از شاخه main (در صورت وجود)
-      - name: Restore Previous Bank
+      - name: Prepare Workspace
         run: |
           mkdir -p dist
-          [ -f bank.json ] && cp bank.json dist/bank.json || echo "First run: no bank.json"
-          [ -f results.json ] && cp results.json dist/results.json || echo "First run: no results.json"
+          [ -f bank.json ] && cp bank.json dist/bank.json || echo "No previous bank.json"
+          [ -f results.json ] && cp results.json dist/results.json || echo "No previous results.json"
 
       - name: Run Pipeline Core
         env:
+          # تعریف متغیرها با هر دو فرمت آریستون و استاندارد جهت جلوگیری از کرش پایتون
+          ARISTON_XRAY: ${{ github.workspace }}/bin/xray
+          ARISTON_SINGBOX: ${{ github.workspace }}/bin/sing-box
           XRAY_BIN: ${{ github.workspace }}/bin/xray
           SINGBOX_BIN: ${{ github.workspace }}/bin/sing-box
+          ARISTON_CONCURRENCY: "64"
+          ARISTON_TIMEOUT: "4.5"
           CONCURRENCY: "64"
           VALIDATE_TIMEOUT: "4.5"
-          # سکرت‌ها بدون هیچ ردپایی در کد فراخوانی می‌شوند
           SOURCES_RAW: ${{ secrets.SOURCES_RAW }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python -m pipeline.main
+        # اجرای ایمن با ساب‌کامند run یا فال‌بک به حالت ساده
+        run: python -m pipeline.main run || python -m pipeline.main
 
-      # انتشار مستقیم روی شاخه اصلی (main) با تکنیک Rolling Squash
       - name: Deploy to Main Branch
         run: |
-          cp -r dist/* ./
+          if [ -d dist ] && [ "$(ls -A dist)" ]; then
+            cp -rf dist/* ./
+          fi
           rm -rf dist bin
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
+
           if ! git diff --cached --quiet; then
             git commit -m "Auto-update node pool [skip ci]"
+            git pull --rebase origin main || true
             git push origin main
           else
-            echo "No changes to commit."
+            echo "No changes detected."
           fi
